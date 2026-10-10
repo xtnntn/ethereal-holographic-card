@@ -125,6 +125,12 @@ function scaledTilt(degrees,sensitivity){
   const d=degrees*magnitude/(magnitude+.6);
   return Math.tanh(d/sensitivity);
 }
+function pitchFoilColor(hex,pitch){
+  const rgb=[1,3,5].map(start=>parseInt(hex.slice(start,start+2),16));
+  const shifted=pitch>=0?[rgb[1],rgb[2],rgb[0]]:[rgb[2],rgb[0],rgb[1]];
+  const amount=Math.abs(pitch)*.16;
+  return `rgb(${rgb.map((value,i)=>Math.round(value+(shifted[i]-value)*amount)).join(',')})`;
+}
 // Separate the foil's light response from the card's physical rotation.
 // A critically damped spring carries velocity through direction changes.
 function createTiltResponse(maxDragTilt){
@@ -291,21 +297,22 @@ if(!gl){
     if(motion.active && motion.ready && !dragging){tx=motion.x;ty=motion.y;}
     const tilt=followTilt(t,tx,ty,dragging);x=tilt.x;y=tilt.y;const rotX=tilt.rotateX,rotY=tilt.rotateY;
     card.style.transform=`rotateX(${rotX.toFixed(3)}deg) rotateY(${rotY.toFixed(3)}deg)`;
-    if(source){ctx.clearRect(0,0,w,h);ctx.drawImage(source,0,0,w,h);let offset=(x*.45-y*.3)*w;
+    if(source){ctx.clearRect(0,0,w,h);ctx.drawImage(source,0,0,w,h);let offset=(x*.45-y*.09)*w;
+      const pitchSheen=1+y*.22;
       tc.clearRect(0,0,w,h);tc.save();let grad=tc.createLinearGradient(-w*.5+offset,-h*.15,w*1.5+offset,h*1.1);
       const cols=c.mode===1?['#7feefa','#8498ff','#b79dff','#e3ffff','#708cff','#8bfff1']:c.mode===2?['#f9d8fb','#deecff','#d5ffef','#fcbee3','#faf7fb','#c6e9fa']:['#ec77dd','#83a2ff','#78f4e5','#fff2ab','#ff91bb','#c5a3ff'];
-      cols.forEach((col,i)=>grad.addColorStop(i/(cols.length-1),col));tc.fillStyle=grad;tc.fillRect(0,0,w,h);tc.globalCompositeOperation='destination-in';tc.drawImage(mask,0,0,w,h);tc.restore();
-      if(c.bg){ctx.globalAlpha=.40*c.intensity;ctx.drawImage(temp,0,0);ctx.globalAlpha=1;}
-      gc.clearRect(0,0,w,h);gc.save();const cx=w*(.50+x*.38-y*.1);
+      cols.forEach((col,i)=>grad.addColorStop(i/(cols.length-1),pitchFoilColor(col,y)));tc.fillStyle=grad;tc.fillRect(0,0,w,h);tc.globalCompositeOperation='destination-in';tc.drawImage(mask,0,0,w,h);tc.restore();
+      if(c.bg){ctx.globalAlpha=.40*c.intensity*pitchSheen;ctx.drawImage(temp,0,0);ctx.globalAlpha=1;}
+      gc.clearRect(0,0,w,h);gc.save();const cx=w*(.50+x*.38-y*.03);
       const light=gc.createLinearGradient(cx-w*.55,-h*.25,cx+w*.30,h*1.2);
       light.addColorStop(0,'rgba(255,255,255,0)');light.addColorStop(.42,'rgba(220,238,255,0)');light.addColorStop(.49,'rgba(244,244,255,.07)');light.addColorStop(.51,'rgba(255,255,255,.85)');light.addColorStop(.535,'rgba(234,219,255,.06)');light.addColorStop(1,'rgba(255,255,255,0)');
       gc.fillStyle=light;gc.fillRect(0,0,w,h);gc.restore();
-      ctx.globalCompositeOperation='screen';ctx.globalAlpha=(.20*c.reflect)+(c.figure?.12*c.intensity:0);ctx.drawImage(glimmer,0,0);ctx.globalCompositeOperation='source-over';ctx.globalAlpha=1;
+      ctx.globalCompositeOperation='screen';ctx.globalAlpha=((.20*c.reflect)+(c.figure?.12*c.intensity:0))*pitchSheen;ctx.drawImage(glimmer,0,0);ctx.globalCompositeOperation='source-over';ctx.globalAlpha=1;
       if(c.sparkle){for(let i=0;i<28;i++){const xx=(i*193.57%w),yy=(i*307.11%h),a=Math.pow(Math.max(0,Math.sin(t*.0009+i*1.88+x*3)),12)*c.intensity*.25;ctx.fillStyle=`rgba(237,249,255,${a})`;ctx.fillRect(xx,yy,1.5,1.5);}}
       if(warningReady2D){
         wc.clearRect(0,0,w,h);
         const strength=Math.min(1,.10+Math.sqrt(x*x+y*y)*1.55);
-        const center=w*(.51+x*.30-y*.12);
+        const center=w*(.51+x*.30-y*.04);
         const lg=wc.createLinearGradient(center-w*.34,0,center+w*.24,0);
         lg.addColorStop(0,'rgba(188,198,214,0)');
         lg.addColorStop(.36,'rgba(198,208,222,.03)');
@@ -418,13 +425,15 @@ void main(){
   float broadSpec=pow(max(dot(normal,lightDir),0.0),7.0);
 
   vec2 axis=normalize(vec2(.88,.47));
-  float flow=fbm(uv*8.0+vec2(uTilt.x*1.7,-uTilt.y*1.4)+uTime*.03);
-  float microFlow=fbm(uv*26.0-vec2(uTilt.y,uTilt.x)*4.0);
-  float plane=dot(uv-vec2(.50),axis)-dot(uTilt,vec2(.58,-.42))*0.82;
+  // Yaw sweeps the diagonal band; pitch mainly changes sheen and colour.
+  float pitchSheen=1.0+uTilt.y*.22;
+  float flow=fbm(uv*8.0+vec2(uTilt.x*1.7,-uTilt.y*.45)+uTime*.03);
+  float microFlow=fbm(uv*26.0-vec2(uTilt.y*.35,uTilt.x)*4.0);
+  float plane=dot(uv-vec2(.50),axis)-dot(uTilt,vec2(.58,-.12))*0.82;
   float warp=(flow-.5)*0.12+(microFlow-.5)*0.03;
-  float beam1=exp(-pow((plane+warp-0.01)/0.075,2.0)*1.65);
-  float beam2=exp(-pow((plane*1.10+warp*.75+0.18)/0.16,2.0)*1.35);
-  float beam3=exp(-pow((plane*0.92+warp*1.25-0.28)/0.105,2.0)*1.85);
+  float beam1=exp(-pow((plane+warp-0.01)/0.075,2.0)*1.65)*pitchSheen;
+  float beam2=exp(-pow((plane*1.10+warp*.75+0.18)/0.16,2.0)*1.35)*pitchSheen;
+  float beam3=exp(-pow((plane*0.92+warp*1.25-0.28)/0.105,2.0)*1.85)*pitchSheen;
   float band=beam1*0.95+beam2*0.55+beam3*0.42;
 
   float stripeA=.5+.5*sin((uv.x*.96+uv.y*.28+warp*.55-plane*.34)*180.0);
@@ -432,8 +441,8 @@ void main(){
   float microLine=.5+.5*sin((uv.x*540.0-uv.y*225.0+plane*55.0+microFlow*8.0));
   float interference=pow(stripeA,8.0)*.16+pow(stripeB,11.0)*.12+pow(microLine,15.0)*.055;
 
-  vec3 rainbow=spectrum(plane*.95+uv.y*.17+warp*.25+.10);
-  vec3 rainbow2=spectrum(plane*.93+.41+flow*.17);
+  vec3 rainbow=spectrum(plane*.95+uv.y*.17+warp*.25+.10+uTilt.y*.12);
+  vec3 rainbow2=spectrum(plane*.93+.41+flow*.17+uTilt.y*.10);
   if(uMode==1){rainbow=mix(rainbow,vec3(.18,.76,1.0),.48);rainbow2=mix(rainbow2,vec3(.33,.53,1.0),.38);} 
   if(uMode==2){rainbow=mix(rainbow,vec3(1.0,.82,.94),.55);rainbow2=mix(rainbow2,vec3(.87,.95,1.0),.62);} 
 
@@ -486,7 +495,7 @@ void main(){
   result=mix(result,base,titleInk);
   float tiltAmount=length(uTilt);
   float foilActivation=smoothstep(.02,.22,tiltAmount);
-  float foilCoord=uv.x*.95+uv.y*.09-.53-uTilt.x*.30+uTilt.y*.10;
+  float foilCoord=uv.x*.95+uv.y*.09-.53-uTilt.x*.30+uTilt.y*.035;
   float foilMain=exp(-pow(foilCoord/.13,2.0)*2.25);
   float foilSide=exp(-pow((foilCoord+.23)/.17,2.0)*2.1);
   float brushWave=.5+.5*sin(uv.x*980.0+uv.y*115.0+flow*2.1);
