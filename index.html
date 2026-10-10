@@ -73,21 +73,46 @@ const canvas=document.getElementById('cardCanvas');
 const card=document.getElementById('card');
 const motionToggle=document.getElementById('motionToggle');
 // Shared orientation source: both the WebGL path and the Canvas fallback use this state.
-const clampUnit=v=>Math.max(-1,Math.min(1,v));
 const isTouchDevice=window.matchMedia('(pointer: coarse)').matches ||
   (navigator.maxTouchPoints>0 && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent));
 const motion={
   supported:isTouchDevice && typeof window.DeviceOrientationEvent!=='undefined',
   active:false,ready:false,connecting:false,listenerAdded:false,
-  baseBeta:null,baseGamma:null,x:0,y:0,probeTimer:null
+  basePose:null,x:0,y:0,probeTimer:null
 };
 function setMotionLabel(text){if(motionToggle)motionToggle.textContent=text;}
 function resetMotionBaseline(){
-  motion.baseBeta=null;motion.baseGamma=null;motion.x=0;motion.y=0;
+  motion.basePose=null;motion.x=0;motion.y=0;
 }
-function wrappedDelta(now,origin,period){
-  let d=now-origin;
-  return ((d+period*.5)%period+period)%period-period*.5;
+function devicePose(ev){
+  const radians=Math.PI/180;
+  const hasHeading=Number.isFinite(ev.alpha);
+  const a=(hasHeading?ev.alpha:0)*radians,b=ev.beta*radians,g=ev.gamma*radians;
+  const ca=Math.cos(a),sa=Math.sin(a),cb=Math.cos(b),sb=Math.sin(b),cg=Math.cos(g),sg=Math.sin(g);
+  // Device Orientation uses intrinsic Z-X-Y rotations, not independent axes.
+  return {hasHeading,rotation:[
+    ca*cg-sa*sb*sg,-sa*cb,ca*sg+sa*sb*cg,
+    sa*cg+ca*sb*sg,ca*cb,sa*sg-ca*sb*cg,
+    -cb*sg,sb,cb*cg
+  ]};
+}
+function relativeNormal(pose,base){
+  const r=pose.rotation,b=base.rotation;
+  if(pose.hasHeading){
+    // Express the current screen normal in the calibrated device frame.
+    return [b[0]*r[2]+b[3]*r[5]+b[6]*r[8],
+      b[1]*r[2]+b[4]*r[5]+b[7]*r[8],
+      b[2]*r[2]+b[5]*r[5]+b[8]*r[8]];
+  }
+  // With no heading reading, infer only the rotation observable from gravity.
+  // Do not invent yaw from unstable gamma readings near an upright phone.
+  const u=r.slice(6),v=b.slice(6);
+  let q=[u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0]];
+  let w=1+u[0]*v[0]+u[1]*v[1]+u[2]*v[2];
+  if(w<1e-8){q=Math.abs(u[0])<.9?[0,u[2],-u[1]]:[-u[2],0,u[0]];w=0;}
+  const length=Math.hypot(...q,w);
+  const [x,y,z]=q.map(value=>value/length);w/=length;
+  return [2*(x*z+w*y),2*(y*z-w*x),1-2*(x*x+y*y)];
 }
 function currentScreenAngle(){
   const angle=(screen.orientation && Number.isFinite(screen.orientation.angle))
@@ -137,21 +162,24 @@ function createTiltResponse(maxDragTilt){
 function handleDeviceOrientation(ev){
   if(!motion.active)return;
   if(!Number.isFinite(ev.beta)||!Number.isFinite(ev.gamma))return;
-  if(motion.baseBeta===null || motion.baseGamma===null){
-    motion.baseBeta=ev.beta;motion.baseGamma=ev.gamma;
+  const pose=devicePose(ev);
+  if(motion.basePose===null || motion.basePose.hasHeading!==pose.hasHeading){
+    motion.basePose=pose;motion.x=0;motion.y=0;
     motion.ready=true;
     if(motion.probeTimer){clearTimeout(motion.probeTimer);motion.probeTimer=null;}
     setMotionLabel('姿态已开启 · 点按校准');
     return;
   }
-  let dBeta=wrappedDelta(ev.beta,motion.baseBeta,360);
-  let dGamma=wrappedDelta(ev.gamma,motion.baseGamma,180);
-  // Express relative device rotation in current screen coordinates.
-  const a=currentScreenAngle();
-  let sx=dGamma,sy=dBeta;
-  if(a===90){sx=-dBeta;sy=dGamma;}
-  else if(a===180){sx=-dGamma;sy=-dBeta;}
-  else if(a===270){sx=dBeta;sy=-dGamma;}
+  const normal=relativeNormal(pose,motion.basePose);
+  const a=currentScreenAngle()*Math.PI/180;
+  const nx=Math.cos(a)*normal[0]+Math.sin(a)*normal[1];
+  const ny=-Math.sin(a)*normal[0]+Math.cos(a)*normal[1];
+  // A swing vector ignores rotation around the screen's own normal.
+  // Unlike Euler subtraction, it remains continuous through upright poses.
+  const radius=Math.hypot(nx,ny);
+  const angle=Math.atan2(radius,normal[2])*180/Math.PI;
+  const sx=radius>1e-8?nx/radius*angle:0;
+  const sy=radius>1e-8?-ny/radius*angle:0;
   // Gentle response near centre, progressively less movement at large angles.
   motion.x=scaledTilt(sx,18);
   motion.y=scaledTilt(sy,22);
