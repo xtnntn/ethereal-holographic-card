@@ -95,8 +95,44 @@ function currentScreenAngle(){
   return ((angle%360)+360)%360;
 }
 function scaledTilt(degrees,sensitivity){
-  const d=Math.sign(degrees)*Math.max(0,Math.abs(degrees)-.8); // reject sensor jitter
-  return clampUnit(d/sensitivity);
+  // Suppress tiny sensor noise without a dead-zone edge or a hard stop.
+  const magnitude=Math.abs(degrees);
+  const d=degrees*magnitude/(magnitude+.6);
+  return Math.tanh(d/sensitivity);
+}
+// Separate the foil's light response from the card's physical rotation.
+// A critically damped spring carries velocity through direction changes.
+function createTiltResponse(maxDragTilt){
+  const state={};
+  for(const axis of ['x','y','rx','ry'])state[axis]={position:0,velocity:0};
+  let lastTime=null;
+  function follow(axis,target,dt,sensorDriven,dragging){
+    const s=state[axis];
+    if(sensorDriven){
+      const omega=20;
+      const offset=s.position-target;
+      const impulse=(s.velocity+omega*offset)*dt;
+      const decay=Math.exp(-omega*dt);
+      s.position=target+(offset+impulse)*decay;
+      s.velocity=(s.velocity-omega*impulse)*decay;
+    }else{
+      const alpha=1-Math.pow(1-(dragging?.22:.09),dt*60);
+      s.position+=(target-s.position)*alpha;
+      s.velocity=0;
+    }
+    return s.position;
+  }
+  return (t,targetX,targetY,dragging)=>{
+    const dt=lastTime===null?1/60:Math.max(0,Math.min((t-lastTime)/1000,.05));
+    lastTime=t;
+    const sensorDriven=motion.active&&motion.ready&&!dragging;
+    return {
+      x:follow('x',targetX,dt,sensorDriven,dragging),
+      y:follow('y',targetY,dt,sensorDriven,dragging),
+      rotateX:follow('rx',-targetY*(sensorDriven?6:maxDragTilt),dt,sensorDriven,dragging),
+      rotateY:follow('ry',targetX*(sensorDriven?8:maxDragTilt),dt,sensorDriven,dragging)
+    };
+  };
 }
 function handleDeviceOrientation(ev){
   if(!motion.active)return;
@@ -116,9 +152,9 @@ function handleDeviceOrientation(ev){
   if(a===90){sx=-dBeta;sy=dGamma;}
   else if(a===180){sx=-dGamma;sy=-dBeta;}
   else if(a===270){sx=dBeta;sy=-dGamma;}
-  // Mobile responds noticeably to a comfortable 10-15 degree hand movement.
-  motion.x=scaledTilt(sx,12.5);
-  motion.y=scaledTilt(sy,15.0);
+  // Gentle response near centre, progressively less movement at large angles.
+  motion.x=scaledTilt(sx,18);
+  motion.y=scaledTilt(sy,22);
 }
 async function startMotion(fromTap){
   if(!motion.supported || motion.connecting)return;
@@ -189,6 +225,7 @@ if(!gl){
   const mask=document.createElement('canvas');mask.width=w;mask.height=h;const mc=mask.getContext('2d');
   const glimmer=document.createElement('canvas');glimmer.width=w;glimmer.height=h;const gc=glimmer.getContext('2d');
   const c={intensity:.7,reflect:.65,maxTilt:22,mode:0,bg:true,figure:true,sparkle:true,springBack:true};
+  const followTilt=createTiltResponse(c.maxTilt);
   const warningLayer=document.createElement('canvas');warningLayer.width=w;warningLayer.height=h;const wc=warningLayer.getContext('2d');
   const warningMaskCanvas=document.createElement('canvas');warningMaskCanvas.width=w;warningMaskCanvas.height=h;const wmctx=warningMaskCanvas.getContext('2d',{willReadFrequently:true});
   let warningReady2D=false;
@@ -224,7 +261,7 @@ if(!gl){
   card.addEventListener('keydown',e=>{let handled=true;switch(e.key){case'ArrowLeft':tx=clamp(tx-.15);break;case'ArrowRight':tx=clamp(tx+.15);break;case'ArrowUp':ty=clamp(ty-.15);break;case'ArrowDown':ty=clamp(ty+.15);break;case'Home':tx=ty=0;break;default:handled=false;}if(handled)e.preventDefault();});
   function frame(t){
     if(motion.active && motion.ready && !dragging){tx=motion.x;ty=motion.y;}
-    const k=dragging?.22:(motion.active&&motion.ready?.17:.09);x+=(tx-x)*k;y+=(ty-y)*k;const rotX=-y*c.maxTilt,rotY=x*c.maxTilt;
+    const tilt=followTilt(t,tx,ty,dragging);x=tilt.x;y=tilt.y;const rotX=tilt.rotateX,rotY=tilt.rotateY;
     card.style.transform=`rotateX(${rotX.toFixed(3)}deg) rotateY(${rotY.toFixed(3)}deg)`;
     if(source){ctx.clearRect(0,0,w,h);ctx.drawImage(source,0,0,w,h);let offset=(x*.45-y*.3)*w;
       tc.clearRect(0,0,w,h);tc.save();let grad=tc.createLinearGradient(-w*.5+offset,-h*.15,w*1.5+offset,h*1.1);
@@ -515,6 +552,7 @@ titleImage.src=WARNING_MASK;
 document.querySelector('.card-face').style.background=`url("${CARD_IMAGE}") center / 100% 100% no-repeat`;
 setImage(CARD_IMAGE,true);
 const config={intensity:.70,reflect:.65,maxTilt:22,mode:0,bg:1,figure:1,sparkle:1,springBack:true};
+const followTilt=createTiltResponse(config.maxTilt);
 let targetX=0,targetY=0,currentX=0,currentY=0,baseX=0,baseY=0,startX=0,startY=0,dragging=false,t0=performance.now();
 const bound=x=>Math.min(1,Math.max(-1,x));
  card.addEventListener('pointerdown',e=>{if(e.button!==0 && e.pointerType==='mouse')return;dragging=true;card.classList.add('dragging');startX=e.clientX;startY=e.clientY;baseX=targetX;baseY=targetY;card.setPointerCapture(e.pointerId);e.preventDefault();});
@@ -524,8 +562,8 @@ const bound=x=>Math.min(1,Math.max(-1,x));
  card.addEventListener('keydown',e=>{let accepted=true;switch(e.key){case'ArrowLeft':targetX=bound(targetX-.15);break;case'ArrowRight':targetX=bound(targetX+.15);break;case'ArrowUp':targetY=bound(targetY-.15);break;case'ArrowDown':targetY=bound(targetY+.15);break;case'Home':targetX=targetY=0;break;default:accepted=false;}if(accepted)e.preventDefault();});
 function frame(t){
  if(motion.active && motion.ready && !dragging){targetX=motion.x;targetY=motion.y;}
- const easing=dragging?.22:(motion.active&&motion.ready?.17:.09);currentX+=(targetX-currentX)*easing;currentY+=(targetY-currentY)*easing;
- const degX=-currentY*config.maxTilt,degY=currentX*config.maxTilt;
+ const tilt=followTilt(t,targetX,targetY,dragging);currentX=tilt.x;currentY=tilt.y;
+ const degX=tilt.rotateX,degY=tilt.rotateY;
  card.style.transform=`rotateX(${degX.toFixed(3)}deg) rotateY(${degY.toFixed(3)}deg)`;
  gl.viewport(0,0,canvas.width,canvas.height);gl.clearColor(.09,.07,.12,1);gl.clear(gl.COLOR_BUFFER_BIT);
  gl.uniform1f(uni.uProtectLogo,protectOriginalLogo);
