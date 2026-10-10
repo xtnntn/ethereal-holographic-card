@@ -154,8 +154,8 @@ function createTiltResponse(maxDragTilt){
     return {
       x:follow('x',targetX,dt,sensorDriven,dragging),
       y:follow('y',targetY,dt,sensorDriven,dragging),
-      rotateX:follow('rx',-targetY*(sensorDriven?6:maxDragTilt),dt,sensorDriven,dragging),
-      rotateY:follow('ry',targetX*(sensorDriven?8:maxDragTilt),dt,sensorDriven,dragging)
+      rotateX:follow('rx',-targetY*(sensorDriven?10:maxDragTilt),dt,sensorDriven,dragging),
+      rotateY:follow('ry',targetX*(sensorDriven?12:maxDragTilt),dt,sensorDriven,dragging)
     };
   };
 }
@@ -181,8 +181,8 @@ function handleDeviceOrientation(ev){
   const sx=radius>1e-8?nx/radius*angle:0;
   const sy=radius>1e-8?-ny/radius*angle:0;
   // Gentle response near centre, progressively less movement at large angles.
-  motion.x=scaledTilt(sx,18);
-  motion.y=scaledTilt(sy,22);
+  motion.x=scaledTilt(sx,16);
+  motion.y=scaledTilt(sy,18);
 }
 async function startMotion(fromTap){
   if(!motion.supported || motion.connecting)return;

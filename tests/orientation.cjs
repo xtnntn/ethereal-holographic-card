@@ -75,7 +75,7 @@ function reading(q){
   return [((a*180/Math.PI)%360+360)%360,b*180/Math.PI,wrap(g*180/Math.PI)];
 }
 function zero(r,label){const a=r.angles();assert(Math.abs(a.pitch)<.002&&Math.abs(a.yaw)<.002,`${label}: ${JSON.stringify(a)}`);}
-function bounded(r){const a=r.angles();assert(Number.isFinite(a.pitch)&&Number.isFinite(a.yaw));assert(Math.abs(a.pitch)<=6.001&&Math.abs(a.yaw)<=8.001);}
+function bounded(r){const a=r.angles();assert(Number.isFinite(a.pitch)&&Number.isFinite(a.yaw));assert(Math.abs(a.pitch)<=10.001&&Math.abs(a.yaw)<=12.001);}
 const basis=pose(37,88,23);
 for(const webgl of [true,false]){
   const equivalent=runtime(webgl);
@@ -85,11 +85,11 @@ for(const webgl of [true,false]){
   const pitch=runtime(webgl);pitch.sensor(...reading(basis));
   pitch.sensor(...reading(multiply(basis,axis(1,15))));pitch.advance();
   assert(Math.abs(pitch.angles().yaw)<.002,'local pitch must not introduce sideways tilt');
-  assert(pitch.angles().pitch<-3&&pitch.angles().pitch>-4);
+  assert(pitch.angles().pitch<-6&&pitch.angles().pitch>-7);
   const yaw=runtime(webgl);yaw.sensor(...reading(basis));
   yaw.sensor(...reading(multiply(basis,axis(2,15))));yaw.advance();
   assert(Math.abs(yaw.angles().pitch)<.002,'local yaw must not introduce front/back tilt');
-  assert(yaw.angles().yaw>5&&yaw.angles().yaw<6);
+  assert(yaw.angles().yaw>8&&yaw.angles().yaw<9);
   const twist=runtime(webgl);twist.sensor(...reading(basis));
   twist.sensor(...reading(multiply(basis,axis(3,45))));twist.advance();zero(twist,'screen-normal twist');
 
